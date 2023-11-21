@@ -5,9 +5,7 @@
 
 ***
 
-## My name is Classi, with an I, and a little dick hanging off the C that bends around and fucks the L out of the A S S. ---CLassi
-
-***
+## I ain't no Mimsy ass ho! I'm a classy bitch! ---CLassi
 
 ***
 
