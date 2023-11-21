@@ -9,8 +9,6 @@
 
 ***
 
-## Original Version
-
 [![Open In Colab][colab-badge]][colab-notebook2]
 
 [colab-notebook2]: <https://colab.research.google.com/github/asigalov61/B-CLassi/blob/main/B_CLassi.ipynb>
