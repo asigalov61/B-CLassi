@@ -9,5 +9,16 @@
 
 ***
 
+## Original Version
+
+[![Open In Colab][colab-badge]][colab-notebook2]
+
+[colab-notebook2]: <https://colab.research.google.com/github/asigalov61/B-CLassi/blob/main/B_CLassi.ipynb>
+[colab-badge]: <https://colab.research.google.com/assets/colab-badge.svg>
+
+### Train your own binary MIDI classifier in Google Colab in less than an hour!!!
+
+***
+
 ### Project Los Angeles
 ### Tegridy Code 2023
