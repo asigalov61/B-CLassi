@@ -408,7 +408,7 @@ print('=' * 70)
 # @title Prep data
 classifier_seq_length_in_notes = 640 # @param {type:"slider", min:128, max:2048, step:128}
 composition_sampling_steps_in_notes = 32 # @param {type:"slider", min:8, max:64, step:8}
-equalize_data_splits = True # @param {type:"boolean"}
+equalize_data_splits = False # @param {type:"boolean"}
 
 #===============================================================================
 
@@ -468,8 +468,8 @@ print('=' * 70)
 # @title Create training datasets and their splits
 training_batch_size = 32 # @param {type:"slider", min:4, max:128, step:4}
 train_dataset_size_ratio = 0.9 # @param {type:"slider", min:0.66, max:0.96, step:0.01}
-validation_dataset_size_ratio = 0.05 # @param {type:"slider", min:0.01, max:0.3, step:0.01}
-test_dataset_size_ratio = 0.05 # @param {type:"slider", min:0.01, max:0.3, step:0.01}
+validation_dataset_size_ratio = 0.02 # @param {type:"slider", min:0.01, max:0.3, step:0.01}
+test_dataset_size_ratio = 0.02 # @param {type:"slider", min:0.01, max:0.3, step:0.01}
 
 #===============================================================================
 
@@ -842,7 +842,7 @@ print('=' * 70)
 print('Total number of processed files:', len(all_test_data))
 print('=' * 70)
 
-"""# (SAVE/LOAD CUSTMO MIDI DATASET DATA)"""
+"""# (SAVE/LOAD CUSTOM MIDI DATASET DATA)"""
 
 # @title Save
 print('=' * 70)
