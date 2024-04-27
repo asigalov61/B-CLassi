@@ -174,7 +174,7 @@ Translates a "score" into MIDI, using score2opus() then opus2midi()
 
 #--------------------------- Decoding stuff ------------------------
 
-def midi2opus(midi=b''):
+def midi2opus(midi=b'', do_not_check_MIDI_signature=False):
     r'''Translates MIDI into a "opus".  For a description of the
 "opus" format, see opus2midi()
 '''
@@ -186,7 +186,8 @@ def midi2opus(midi=b''):
     if id != b'MThd':
         _warn("midi2opus: midi starts with "+str(id)+" instead of 'MThd'")
         _clean_up_warnings()
-        return [1000,[],]
+        if do_not_check_MIDI_signature == False:
+          return [1000,[],]
     [length, format, tracks_expected, ticks] = struct.unpack(
      '>IHHH', bytes(my_midi[4:14]))
     if length != 6:
@@ -266,27 +267,38 @@ see opus2midi() and score2opus().
     _clean_up_warnings()
     return score
 
-def midi2score(midi=b''):
+def midi2score(midi=b'', do_not_check_MIDI_signature=False):
     r'''
 Translates MIDI into a "score", using midi2opus() then opus2score()
 '''
-    return opus2score(midi2opus(midi))
+    return opus2score(midi2opus(midi, do_not_check_MIDI_signature))
 
-def midi2ms_score(midi=b''):
+def midi2ms_score(midi=b'', do_not_check_MIDI_signature=False):
     r'''
 Translates MIDI into a "score" with one beat per second and one
 tick per millisecond, using midi2opus() then to_millisecs()
 then opus2score()
 '''
-    return opus2score(to_millisecs(midi2opus(midi)))
+    return opus2score(to_millisecs(midi2opus(midi, do_not_check_MIDI_signature)))
 
-def midi2single_track_ms_score(midi=b'', recalculate_channels = True, pass_old_timings_events= False, verbose = False):
+def midi2single_track_ms_score(midi_path_or_bytes, 
+                                recalculate_channels = False, 
+                                pass_old_timings_events= False, 
+                                verbose = False, 
+                                do_not_check_MIDI_signature=False
+                                ):
     r'''
 Translates MIDI into a single track "score" with 16 instruments and one beat per second and one
 tick per millisecond
 '''
 
-    score = midi2score(midi)
+    if type(midi_path_or_bytes) == bytes:
+      midi_data = midi_path_or_bytes
+
+    elif type(midi_path_or_bytes) == str:
+      midi_data = open(midi_path_or_bytes, 'rb').read() 
+
+    score = midi2score(midi_data, do_not_check_MIDI_signature)
 
     if recalculate_channels:
 
@@ -1461,6 +1473,7 @@ import tqdm
 
 from itertools import zip_longest
 from itertools import groupby
+from collections import Counter
 
 from operator import itemgetter
 
@@ -1643,13 +1656,15 @@ def Tegridy_SONG_to_MIDI_Converter(SONG,
 
 ###################################################################################
 
-def Tegridy_ms_SONG_to_MIDI_Converter(SONG,
+def Tegridy_ms_SONG_to_MIDI_Converter(ms_SONG,
                                       output_signature = 'Tegridy TMIDI Module', 
                                       track_name = 'Composition Track',
                                       list_of_MIDI_patches = [0, 24, 32, 40, 42, 46, 56, 71, 73, 0, 0, 0, 0, 0, 0, 0],
                                       output_file_name = 'TMIDI-Composition',
                                       text_encoding='ISO-8859-1',
-                                      verbose=True):
+                                      timings_multiplier=1,
+                                      verbose=True
+                                      ):
 
     '''Tegridy milisecond SONG to MIDI Converter
      
@@ -1659,12 +1674,14 @@ def Tegridy_ms_SONG_to_MIDI_Converter(SONG,
            List of 16 MIDI patch numbers for output MIDI. Def. is MuseNet compatible patches.
            Output file name w/o .mid extension.
            Optional text encoding if you are working with text_events/lyrics. This is especially useful for Karaoke. Please note that anything but ISO-8859-1 is a non-standard way of encoding text_events according to MIDI specs.
+           Optional timings multiplier
+           Optional verbose output
 
     Output: MIDI File
             Detailed MIDI stats
 
     Project Los Angeles
-    Tegridy Code 2020'''                                  
+    Tegridy Code 2024'''                                  
     
     if verbose:
         print('Converting to MIDI. Please stand-by...')
@@ -1691,6 +1708,14 @@ def Tegridy_ms_SONG_to_MIDI_Converter(SONG,
                     ['patch_change', 0, 14, list_of_MIDI_patches[14]],
                     ['patch_change', 0, 15, list_of_MIDI_patches[15]],
                     ['track_name', 0, bytes(track_name, text_encoding)]]
+
+    SONG = copy.deepcopy(ms_SONG)
+
+    if timings_multiplier != 1:
+      for S in SONG:
+        S[1] = S[1] * timings_multiplier
+        if S[0] == 'note':
+          S[2] = S[2] * timings_multiplier
 
     output = output_header + [patch_list + SONG]
 
@@ -1735,7 +1760,9 @@ def plot_ms_SONG(ms_song,
                   drums_color_num=128, 
                   plot_size=(11,4), 
                   note_height = 0.75,
-                  show_grid_lines=False):
+                  show_grid_lines=False,
+                  return_plt = False
+                  ):
 
   '''Tegridy ms SONG plotter/vizualizer'''
 
@@ -1783,10 +1810,13 @@ def plot_ms_SONG(ms_song,
     if show_grid_lines:
       ax.grid(color='white')
 
-    plt.xlabel('Time', c='black')
-    plt.ylabel('Pitch', c='black')
+    plt.xlabel('Time (s)', c='black')
+    plt.ylabel('MIDI Pitch', c='black')
 
     plt.title(plot_title)
+
+    if return_plt:
+      return fig
 
     plt.show()
 
@@ -3779,19 +3809,41 @@ def fix_monophonic_score_durations(monophonic_score):
   
     fixed_score = []
 
-    for i in range(len(monophonic_score)-1):
-      note = monophonic_score[i]
+    if monophonic_score[0][0] == 'note':
 
-      nmt = monophonic_score[i+1][1]
+      for i in range(len(monophonic_score)-1):
+        note = monophonic_score[i]
 
-      if note[1]+note[2] >= nmt:
-        note_dur = nmt-note[1]-1
-      else:
-        note_dur = note[2]
+        nmt = monophonic_score[i+1][1]
 
-      fixed_score.append([note[0], note[1], note_dur, note[3], note[4], note[5]])
+        if note[1]+note[2] >= nmt:
+          note_dur = nmt-note[1]-1
+        else:
+          note_dur = note[2]
 
-    fixed_score.append(monophonic_score[-1])
+        new_note = [note[0], note[1], note_dur] + note[3:]
+
+        fixed_score.append(new_note)
+
+      fixed_score.append(monophonic_score[-1])
+
+    elif type(monophonic_score[0][0]) == int:
+
+      for i in range(len(monophonic_score)-1):
+        note = monophonic_score[i]
+
+        nmt = monophonic_score[i+1][0]
+
+        if note[0]+note[1] >= nmt:
+          note_dur = nmt-note[0]-1
+        else:
+          note_dur = note[1]
+
+        new_note = [note[0], note_dur] + note[2:]
+
+        fixed_score.append(new_note)
+
+      fixed_score.append(monophonic_score[-1]) 
 
     return fixed_score
 
@@ -3982,64 +4034,63 @@ def analyze_score_pitches(score, channels_to_analyze=[0]):
 
 ###################################################################################
 
-ALL_CHORDS_GROUPED = [[[1, 3, 5, 7, 9, 11], [0, 2, 4, 6, 8, 10]],
-    [[0, 2, 5, 7, 10], [0, 2, 4, 7, 9], [0, 2, 5, 7, 9], [1, 4, 6, 9, 11],
-    [1, 3, 6, 8, 11], [1, 3, 6, 8, 10], [1, 4, 6, 8, 11], [1, 3, 5, 8, 10],
-    [2, 4, 6, 9, 11], [2, 4, 7, 9, 11], [0, 3, 5, 7, 10], [0, 3, 5, 8, 10],
-    [0, 3, 6, 8, 10], [0, 2, 4, 6, 9], [1, 4, 7, 9, 11], [2, 4, 6, 8, 11],
-    [1, 3, 6, 9, 11], [1, 3, 5, 8, 11], [0, 2, 5, 8, 10], [1, 4, 6, 8, 10],
-    [0, 3, 5, 7, 9], [2, 5, 7, 9, 11], [1, 3, 5, 7, 10], [0, 2, 4, 7, 10],
-    [1, 3, 5, 7, 9], [1, 3, 5, 9, 11], [1, 5, 7, 9, 11], [1, 3, 7, 9, 11],
-    [3, 5, 7, 9, 11], [2, 4, 6, 8, 10], [0, 4, 6, 8, 10], [0, 2, 6, 8, 10],
-    [1, 3, 5, 7, 11], [0, 2, 4, 8, 10], [0, 2, 4, 6, 8], [0, 2, 4, 6, 10]],
-  [[2, 5, 7, 10], [0, 3, 7, 10], [1, 4, 8, 11], [2, 4, 7, 11], [0, 4, 7, 9],
-    [0, 2, 5, 9], [2, 6, 9, 11], [1, 5, 8, 10], [0, 3, 5, 8], [3, 6, 8, 11],
-    [1, 3, 6, 10], [1, 4, 6, 9], [0, 3, 6, 9], [2, 5, 8, 11], [1, 4, 7, 10],
-    [2, 5, 7, 11], [0, 2, 6, 9], [0, 4, 7, 10], [2, 4, 8, 11], [0, 3, 5, 9],
-    [1, 4, 7, 9], [3, 6, 9, 11], [2, 5, 8, 10], [1, 4, 6, 10], [0, 3, 6, 8],
-    [1, 3, 7, 10], [1, 5, 8, 11], [0, 2, 5, 10], [0, 5, 7, 9], [0, 3, 8, 10],
-    [0, 2, 4, 7], [4, 6, 8, 11], [3, 5, 7, 10], [2, 7, 9, 11], [2, 4, 6, 9],
-    [1, 6, 8, 10], [1, 4, 9, 11], [1, 3, 5, 8], [1, 3, 6, 11], [2, 5, 9, 11],
-    [2, 4, 7, 10], [0, 2, 5, 8], [1, 5, 7, 10], [0, 4, 6, 9], [1, 3, 6, 9],
-    [0, 3, 6, 10], [2, 6, 8, 11], [0, 2, 7, 9], [1, 4, 8, 10], [0, 3, 7, 9],
-    [3, 5, 8, 11], [0, 5, 7, 10], [0, 2, 5, 7], [1, 4, 7, 11], [2, 4, 7, 9],
-    [0, 3, 5, 10], [4, 6, 9, 11], [1, 4, 6, 11], [2, 4, 9, 11], [1, 6, 8, 11],
-    [1, 3, 6, 8], [1, 3, 8, 10], [3, 5, 8, 10], [4, 7, 9, 11], [0, 2, 7, 10],
-    [2, 5, 7, 9], [0, 2, 4, 9], [1, 6, 9, 11], [2, 4, 6, 11], [0, 3, 5, 7],
-    [0, 5, 8, 10], [1, 4, 6, 8], [1, 3, 5, 10], [1, 3, 8, 11], [3, 6, 8, 10],
-    [1, 3, 7, 9], [3, 5, 9, 11], [2, 4, 8, 10], [1, 5, 7, 11], [0, 2, 6, 8],
-    [0, 4, 6, 10], [1, 3, 5, 9], [1, 5, 7, 9], [2, 6, 8, 10], [3, 7, 9, 11],
-    [0, 2, 4, 8], [0, 4, 6, 8], [0, 4, 8, 10], [2, 4, 6, 10], [1, 3, 7, 11],
-    [0, 2, 6, 10], [1, 5, 9, 11], [3, 5, 7, 11], [1, 7, 9, 11], [0, 2, 4, 6],
-    [1, 3, 9, 11], [0, 2, 4, 10], [5, 7, 9, 11], [2, 4, 6, 8], [0, 2, 8, 10],
-    [3, 5, 7, 9], [1, 3, 5, 7], [4, 6, 8, 10], [0, 6, 8, 10], [1, 3, 5, 11]],
-  [[2, 7, 11], [0, 4, 7], [0, 5, 9], [2, 6, 9], [2, 5, 10], [1, 4, 9],
-    [4, 8, 11], [3, 7, 10], [0, 3, 8], [3, 6, 11], [1, 5, 8], [1, 6, 10],
-    [0, 4, 9], [2, 5, 9], [4, 7, 11], [2, 7, 10], [2, 6, 11], [0, 3, 7],
-    [0, 5, 8], [1, 4, 8], [1, 6, 9], [3, 8, 11], [1, 5, 10], [3, 6, 10],
-    [2, 5, 11], [4, 7, 10], [3, 6, 9], [0, 6, 9], [0, 3, 9], [2, 8, 11],
-    [2, 5, 8], [1, 7, 10], [1, 4, 7], [0, 3, 6], [1, 4, 10], [5, 8, 11],
-    [2, 5, 7], [0, 7, 10], [0, 2, 9], [0, 3, 5], [6, 9, 11], [4, 7, 9],
-    [2, 4, 11], [5, 8, 10], [1, 3, 10], [1, 4, 6], [3, 6, 8], [1, 8, 11],
-    [5, 7, 11], [0, 4, 10], [3, 5, 9], [0, 2, 6], [1, 7, 9], [0, 7, 9],
-    [5, 7, 10], [2, 8, 10], [3, 9, 11], [0, 2, 5], [2, 4, 8], [2, 4, 7],
-    [0, 2, 7], [2, 7, 9], [4, 9, 11], [4, 6, 9], [1, 3, 7], [2, 4, 9], [0, 5, 7],
-    [0, 3, 10], [2, 9, 11], [0, 5, 10], [0, 6, 8], [4, 6, 10], [4, 6, 11],
-    [1, 4, 11], [6, 8, 11], [1, 5, 11], [1, 6, 11], [1, 8, 10], [1, 6, 8],
-    [3, 5, 8], [3, 8, 10], [1, 3, 8], [3, 5, 10], [1, 3, 6], [1, 5, 9], [0, 4, 8],
-    [2, 6, 10], [3, 7, 11], [2, 4, 10], [5, 9, 11], [1, 5, 7], [0, 2, 8],
-    [0, 4, 6], [1, 7, 11], [3, 7, 9], [1, 3, 9], [7, 9, 11], [5, 7, 9],
-    [0, 6, 10], [0, 2, 10], [2, 6, 8], [0, 2, 4], [4, 8, 10], [1, 9, 11],
-    [2, 4, 6], [3, 5, 11], [3, 5, 7], [0, 8, 10], [4, 6, 8], [1, 3, 11],
-    [6, 8, 10], [1, 3, 5]],
-  [[0, 9], [2, 5], [4, 7], [7, 10], [2, 11], [0, 3], [6, 9], [1, 4], [8, 11],
-    [5, 8], [1, 10], [3, 6], [0, 4], [5, 9], [7, 11], [0, 7], [0, 5], [2, 10],
-    [2, 7], [2, 9], [2, 6], [4, 11], [4, 9], [3, 7], [5, 10], [1, 9], [0, 8],
-    [6, 11], [3, 11], [4, 8], [3, 10], [3, 8], [1, 5], [1, 8], [1, 6], [6, 10],
-    [3, 9], [4, 10], [1, 7], [0, 6], [2, 8], [5, 11], [5, 7], [0, 10], [0, 2],
-    [9, 11], [7, 9], [2, 4], [4, 6], [3, 5], [8, 10], [6, 8], [1, 3], [1, 11]],
-  [[0], [7], [5], [9], [2], [4], [11], [10], [8], [6], [3], [1]]
-    ]
+ALL_CHORDS_GROUPED = [[[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11]],
+                      [[0, 2], [0, 3], [0, 4], [0, 5], [0, 6], [0, 7], [0, 8], [0, 9], [0, 10],
+                        [1, 3], [1, 4], [1, 5], [1, 6], [1, 7], [1, 8], [1, 9], [1, 10], [1, 11],
+                        [2, 4], [2, 5], [2, 6], [2, 7], [2, 8], [2, 9], [2, 10], [2, 11], [3, 5],
+                        [3, 6], [3, 7], [3, 8], [3, 9], [3, 10], [3, 11], [4, 6], [4, 7], [4, 8],
+                        [4, 9], [4, 10], [4, 11], [5, 7], [5, 8], [5, 9], [5, 10], [5, 11], [6, 8],
+                        [6, 9], [6, 10], [6, 11], [7, 9], [7, 10], [7, 11], [8, 10], [8, 11],
+                        [9, 11]],
+                      [[0, 2, 4], [0, 2, 5], [0, 3, 5], [0, 2, 6], [0, 3, 6], [0, 4, 6], [0, 2, 7],
+                        [0, 3, 7], [0, 4, 7], [0, 5, 7], [0, 2, 8], [0, 3, 8], [0, 4, 8], [0, 5, 8],
+                        [0, 6, 8], [0, 2, 9], [0, 3, 9], [0, 4, 9], [0, 5, 9], [0, 6, 9], [0, 7, 9],
+                        [0, 2, 10], [0, 3, 10], [0, 4, 10], [0, 5, 10], [0, 6, 10], [0, 7, 10],
+                        [0, 8, 10], [1, 3, 5], [1, 3, 6], [1, 4, 6], [1, 3, 7], [1, 4, 7], [1, 5, 7],
+                        [1, 3, 8], [1, 4, 8], [1, 5, 8], [1, 6, 8], [1, 3, 9], [1, 4, 9], [1, 5, 9],
+                        [1, 6, 9], [1, 7, 9], [1, 3, 10], [1, 4, 10], [1, 5, 10], [1, 6, 10],
+                        [1, 7, 10], [1, 8, 10], [1, 3, 11], [1, 4, 11], [1, 5, 11], [1, 6, 11],
+                        [1, 7, 11], [1, 8, 11], [1, 9, 11], [2, 4, 6], [2, 4, 7], [2, 5, 7],
+                        [2, 4, 8], [2, 5, 8], [2, 6, 8], [2, 4, 9], [2, 5, 9], [2, 6, 9], [2, 7, 9],
+                        [2, 4, 10], [2, 5, 10], [2, 6, 10], [2, 7, 10], [2, 8, 10], [2, 4, 11],
+                        [2, 5, 11], [2, 6, 11], [2, 7, 11], [2, 8, 11], [2, 9, 11], [3, 5, 7],
+                        [3, 5, 8], [3, 6, 8], [3, 5, 9], [3, 6, 9], [3, 7, 9], [3, 5, 10], [3, 6, 10],
+                        [3, 7, 10], [3, 8, 10], [3, 5, 11], [3, 6, 11], [3, 7, 11], [3, 8, 11],
+                        [3, 9, 11], [4, 6, 8], [4, 6, 9], [4, 7, 9], [4, 6, 10], [4, 7, 10],
+                        [4, 8, 10], [4, 6, 11], [4, 7, 11], [4, 8, 11], [4, 9, 11], [5, 7, 9],
+                        [5, 7, 10], [5, 8, 10], [5, 7, 11], [5, 8, 11], [5, 9, 11], [6, 8, 10],
+                        [6, 8, 11], [6, 9, 11], [7, 9, 11]],
+                      [[0, 2, 4, 6], [0, 2, 4, 7], [0, 2, 5, 7], [0, 3, 5, 7], [0, 2, 4, 8],
+                        [0, 2, 5, 8], [0, 2, 6, 8], [0, 3, 5, 8], [0, 3, 6, 8], [0, 4, 6, 8],
+                        [0, 2, 4, 9], [0, 2, 5, 9], [0, 2, 6, 9], [0, 2, 7, 9], [0, 3, 5, 9],
+                        [0, 3, 6, 9], [0, 3, 7, 9], [0, 4, 6, 9], [0, 4, 7, 9], [0, 5, 7, 9],
+                        [0, 2, 4, 10], [0, 2, 5, 10], [0, 2, 6, 10], [0, 2, 7, 10], [0, 2, 8, 10],
+                        [0, 3, 5, 10], [0, 3, 6, 10], [0, 3, 7, 10], [0, 3, 8, 10], [0, 4, 6, 10],
+                        [0, 4, 7, 10], [0, 4, 8, 10], [0, 5, 7, 10], [0, 5, 8, 10], [0, 6, 8, 10],
+                        [1, 3, 5, 7], [1, 3, 5, 8], [1, 3, 6, 8], [1, 4, 6, 8], [1, 3, 5, 9],
+                        [1, 3, 6, 9], [1, 3, 7, 9], [1, 4, 6, 9], [1, 4, 7, 9], [1, 5, 7, 9],
+                        [1, 3, 5, 10], [1, 3, 6, 10], [1, 3, 7, 10], [1, 3, 8, 10], [1, 4, 6, 10],
+                        [1, 4, 7, 10], [1, 4, 8, 10], [1, 5, 7, 10], [1, 5, 8, 10], [1, 6, 8, 10],
+                        [1, 3, 5, 11], [1, 3, 6, 11], [1, 3, 7, 11], [1, 3, 8, 11], [1, 3, 9, 11],
+                        [1, 4, 6, 11], [1, 4, 7, 11], [1, 4, 8, 11], [1, 4, 9, 11], [1, 5, 7, 11],
+                        [1, 5, 8, 11], [1, 5, 9, 11], [1, 6, 8, 11], [1, 6, 9, 11], [1, 7, 9, 11],
+                        [2, 4, 6, 8], [2, 4, 6, 9], [2, 4, 7, 9], [2, 5, 7, 9], [2, 4, 6, 10],
+                        [2, 4, 7, 10], [2, 4, 8, 10], [2, 5, 7, 10], [2, 5, 8, 10], [2, 6, 8, 10],
+                        [2, 4, 6, 11], [2, 4, 7, 11], [2, 4, 8, 11], [2, 4, 9, 11], [2, 5, 7, 11],
+                        [2, 5, 8, 11], [2, 5, 9, 11], [2, 6, 8, 11], [2, 6, 9, 11], [2, 7, 9, 11],
+                        [3, 5, 7, 9], [3, 5, 7, 10], [3, 5, 8, 10], [3, 6, 8, 10], [3, 5, 7, 11],
+                        [3, 5, 8, 11], [3, 5, 9, 11], [3, 6, 8, 11], [3, 6, 9, 11], [3, 7, 9, 11],
+                        [4, 6, 8, 10], [4, 6, 8, 11], [4, 6, 9, 11], [4, 7, 9, 11], [5, 7, 9, 11]],
+                      [[0, 2, 4, 6, 8], [0, 2, 4, 6, 9], [0, 2, 4, 7, 9], [0, 2, 5, 7, 9],
+                        [0, 3, 5, 7, 9], [0, 2, 4, 6, 10], [0, 2, 4, 7, 10], [0, 2, 4, 8, 10],
+                        [0, 2, 5, 7, 10], [0, 2, 5, 8, 10], [0, 2, 6, 8, 10], [0, 3, 5, 7, 10],
+                        [0, 3, 5, 8, 10], [0, 3, 6, 8, 10], [0, 4, 6, 8, 10], [1, 3, 5, 7, 9],
+                        [1, 3, 5, 7, 10], [1, 3, 5, 8, 10], [1, 3, 6, 8, 10], [1, 4, 6, 8, 10],
+                        [1, 3, 5, 7, 11], [1, 3, 5, 8, 11], [1, 3, 5, 9, 11], [1, 3, 6, 8, 11],
+                        [1, 3, 6, 9, 11], [1, 3, 7, 9, 11], [1, 4, 6, 8, 11], [1, 4, 6, 9, 11],
+                        [1, 4, 7, 9, 11], [1, 5, 7, 9, 11], [2, 4, 6, 8, 10], [2, 4, 6, 8, 11],
+                        [2, 4, 6, 9, 11], [2, 4, 7, 9, 11], [2, 5, 7, 9, 11], [3, 5, 7, 9, 11]],
+                      [[0, 2, 4, 6, 8, 10], [1, 3, 5, 7, 9, 11]]]
 
 def group_sublists_by_length(lst):
     unique_lengths = sorted(list(set(map(len, lst))), reverse=True)
@@ -4055,10 +4106,10 @@ def tones_chord_to_pitches(tones_chord, base_pitch=60):
 
 def advanced_score_processor(raw_score, 
                               patches_to_analyze=list(range(129)), 
-                              return_score_analysis=True, 
+                              return_score_analysis=False,
                               return_enhanced_score=False,
                               return_enhanced_score_notes=False,
-                              return_enhanced_monophonic_melody=False, 
+                              return_enhanced_monophonic_melody=False,
                               return_chordified_enhanced_score=False,
                               return_chordified_enhanced_score_with_lyrics=False,
                               return_score_tones_chords=False,
@@ -4326,30 +4377,42 @@ def replace_bad_tones_chord(bad_tones_chord):
 ###################################################################################
 
 def check_and_fix_chord(chord, 
-                        channel_index=3, 
-                        pitch_index=4):
+                        channel_index=3,
+                        pitch_index=4
+                        ):
 
-  chord_notes = [x for x in chord if x[channel_index] != 9]
-  chord_drums = [x for x in chord if x[channel_index] == 9]
-  chord_pitches = [x[pitch_index] for x in chord_notes]
-  tones_chord = sorted(set([x % 12 for x in chord_pitches]))
-  good_tones_chord = replace_bad_tones_chord(tones_chord)[0]
-  bad_tones = list(set(tones_chord) ^ set(good_tones_chord))
+    tones_chord = sorted(set([t[pitch_index] % 12 for t in chord if t[channel_index] != 9]))
 
-  if bad_tones:
+    notes_events = [t for t in chord if t[channel_index] != 9]
+    notes_events.sort(key=lambda x: x[pitch_index], reverse=True)
 
-    fixed_chord = []
+    drums_events = [t for t in chord if t[channel_index] == 9]
 
-    for c in chord_notes:
-      if (c[pitch_index] % 12) not in bad_tones:
-        fixed_chord.append(c)
+    checked_and_fixed_chord = []
 
-    fixed_chord += chord_drums
+    if tones_chord:
+        
+        new_tones_chord = advanced_check_and_fix_tones_chord(tones_chord, high_pitch=notes_events[0][pitch_index])
 
-    return fixed_chord
+        if new_tones_chord != tones_chord:
 
-  else:
-    return chord
+          if len(notes_events) > 1:
+              checked_and_fixed_chord.extend([notes_events[0]])
+              for cc in notes_events[1:]:
+                  if cc[channel_index] != 9:
+                      if (cc[pitch_index] % 12) in new_tones_chord:
+                          checked_and_fixed_chord.extend([cc])
+              checked_and_fixed_chord.extend(drums_events)
+          else:
+              checked_and_fixed_chord.extend([notes_events[0]])
+        else:
+          checked_and_fixed_chord.extend(chord)
+    else:
+        checked_and_fixed_chord.extend(chord)
+
+    checked_and_fixed_chord.sort(key=lambda x: x[pitch_index], reverse=True)
+
+    return checked_and_fixed_chord
 
 ###################################################################################
 
@@ -4535,6 +4598,496 @@ def check_and_fix_tones_chord(tones_chord):
       non_consecutive.remove(0)
 
     return non_consecutive
+
+###################################################################################
+
+def find_closest_tone(tones, tone):
+  return min(tones, key=lambda x:abs(x-tone))
+
+def advanced_check_and_fix_tones_chord(tones_chord, high_pitch=0):
+
+    lst = tones_chord
+
+    if 0 < high_pitch < 128: 
+      ht = high_pitch % 12
+    else:
+      ht = 12
+
+    cht = find_closest_tone(lst, ht)
+
+    if len(lst) == 2:
+      if lst[1] - lst[0] == 1:
+        return [cht]
+      else:
+        if 0 in lst and 11 in lst:
+          if find_closest_tone([0, 11], cht) == 11:
+            lst.remove(0)
+          else:
+            lst.remove(11)
+        return lst
+
+    non_consecutive = []
+
+    if len(lst) > 2: 
+      for i in range(0, len(lst) - 1):
+          if lst[i] + 1 != lst[i+1]:
+            non_consecutive.append(lst[i])
+      if lst[-1] - lst[-2] > 1:
+        non_consecutive.append(lst[-1])
+
+    if cht not in non_consecutive:
+      non_consecutive.append(cht)
+      non_consecutive.sort()
+      if any(abs(non_consecutive[i+1] - non_consecutive[i]) == 1 for i in range(len(non_consecutive) - 1)):
+        final_list = [x for x in non_consecutive if x == cht or abs(x - cht) > 1]
+      else:
+        final_list = non_consecutive
+
+    else:
+      final_list = non_consecutive
+
+    if 0 in final_list and 11 in final_list:
+      if find_closest_tone([0, 11], cht) == 11:
+        final_list.remove(0)
+      else:
+        final_list.remove(11)
+
+    if cht in final_list or ht in final_list:
+      return final_list
+    else:
+      return ['Error']
+
+###################################################################################
+
+def create_similarity_matrix(list_of_values, matrix_length=0):
+
+    counts = Counter(list_of_values).items()
+
+    if matrix_length > 0:
+      sim_matrix = [0] * max(matrix_length, len(list_of_values))
+    else:
+      sim_matrix = [0] * len(counts)
+
+    for c in counts:
+      sim_matrix[c[0]] = c[1]
+
+    similarity_matrix = [[0] * len(sim_matrix) for _ in range(len(sim_matrix))]
+
+    for i in range(len(sim_matrix)):
+      for j in range(len(sim_matrix)):
+        if max(sim_matrix[i], sim_matrix[j]) != 0:
+          similarity_matrix[i][j] = min(sim_matrix[i], sim_matrix[j]) / max(sim_matrix[i], sim_matrix[j])
+
+    return similarity_matrix, sim_matrix
+
+###################################################################################
+
+def augment_enhanced_score_notes(enhanced_score_notes,
+                                  timings_divider=16,
+                                  full_sorting=True,
+                                  timings_shift=0,
+                                  pitch_shift=0
+                                ):
+
+    esn = copy.deepcopy(enhanced_score_notes)
+
+    for e in esn:
+      e[1] = int(e[1] / timings_divider) + timings_shift
+      e[2] = int(e[2] / timings_divider) + timings_shift
+      e[4] = e[4] + pitch_shift
+
+    if full_sorting:
+
+      # Sorting by patch, pitch, then by start-time
+      esn.sort(key=lambda x: x[6])
+      esn.sort(key=lambda x: x[4], reverse=True)
+      esn.sort(key=lambda x: x[1])
+
+    return esn
+
+###################################################################################
+
+def stack_list(lst, base=12):
+    return sum(j * base**i for i, j in enumerate(lst[::-1]))
+
+def destack_list(num, base=12):
+    lst = []
+    while num:
+        lst.append(num % base)
+        num //= base
+    return lst[::-1]
+
+###################################################################################
+
+def extract_melody(chordified_enhanced_score, 
+                    melody_range=[48, 84], 
+                    melody_channel=0,
+                    melody_patch=0,
+                    melody_velocity=0,
+                    stacked_melody=False,
+                    stacked_melody_base_pitch=60
+                  ):
+
+    if stacked_melody:
+
+      
+      all_pitches_chords = []
+      for e in chordified_enhanced_score:
+        all_pitches_chords.append(sorted(set([p[4] for p in e]), reverse=True))
+      
+      melody_score = []
+      for i, chord in enumerate(chordified_enhanced_score):
+
+        if melody_velocity > 0:
+          vel = melody_velocity
+        else:
+          vel = chord[0][5]
+
+        melody_score.append(['note', chord[0][1], chord[0][2], melody_channel, stacked_melody_base_pitch+(stack_list([p % 12 for p in all_pitches_chords[i]]) % 12), vel, melody_patch])
+  
+    else:
+
+      melody_score = copy.deepcopy([c[0] for c in chordified_enhanced_score if c[0][3] != 9])
+      
+      for e in melody_score:
+        
+          e[3] = melody_channel
+
+          if melody_velocity > 0:
+            e[5] = melody_velocity
+
+          e[6] = melody_patch
+
+          if e[4] < melody_range[0]:
+              e[4] = (e[4] % 12) + melody_range[0]
+              
+          if e[4] >= melody_range[1]:
+              e[4] = (e[4] % 12) + (melody_range[1]-12)
+
+    return fix_monophonic_score_durations(melody_score)
+
+###################################################################################
+
+def flip_enhanced_score_notes(enhanced_score_notes):
+
+    min_pitch = min([e[4] for e in enhanced_score_notes if e[3] != 9])
+
+    fliped_score_pitches = [127 - e[4]for e in enhanced_score_notes if e[3] != 9]
+
+    delta_min_pitch = min_pitch - min([p for p in fliped_score_pitches])
+
+    output_score = copy.deepcopy(enhanced_score_notes)
+
+    for e in output_score:
+        if e[3] != 9:
+            e[4] = (127 - e[4]) + delta_min_pitch
+
+    return output_score
+
+###################################################################################
+
+ALL_CHORDS_SORTED = [[0], [0, 2], [0, 3], [0, 4], [0, 2, 4], [0, 5], [0, 2, 5], [0, 3, 5], [0, 6],
+                    [0, 2, 6], [0, 3, 6], [0, 4, 6], [0, 2, 4, 6], [0, 7], [0, 2, 7], [0, 3, 7],
+                    [0, 4, 7], [0, 5, 7], [0, 2, 4, 7], [0, 2, 5, 7], [0, 3, 5, 7], [0, 8],
+                    [0, 2, 8], [0, 3, 8], [0, 4, 8], [0, 5, 8], [0, 6, 8], [0, 2, 4, 8],
+                    [0, 2, 5, 8], [0, 2, 6, 8], [0, 3, 5, 8], [0, 3, 6, 8], [0, 4, 6, 8],
+                    [0, 2, 4, 6, 8], [0, 9], [0, 2, 9], [0, 3, 9], [0, 4, 9], [0, 5, 9], [0, 6, 9],
+                    [0, 7, 9], [0, 2, 4, 9], [0, 2, 5, 9], [0, 2, 6, 9], [0, 2, 7, 9],
+                    [0, 3, 5, 9], [0, 3, 6, 9], [0, 3, 7, 9], [0, 4, 6, 9], [0, 4, 7, 9],
+                    [0, 5, 7, 9], [0, 2, 4, 6, 9], [0, 2, 4, 7, 9], [0, 2, 5, 7, 9],
+                    [0, 3, 5, 7, 9], [0, 10], [0, 2, 10], [0, 3, 10], [0, 4, 10], [0, 5, 10],
+                    [0, 6, 10], [0, 7, 10], [0, 8, 10], [0, 2, 4, 10], [0, 2, 5, 10],
+                    [0, 2, 6, 10], [0, 2, 7, 10], [0, 2, 8, 10], [0, 3, 5, 10], [0, 3, 6, 10],
+                    [0, 3, 7, 10], [0, 3, 8, 10], [0, 4, 6, 10], [0, 4, 7, 10], [0, 4, 8, 10],
+                    [0, 5, 7, 10], [0, 5, 8, 10], [0, 6, 8, 10], [0, 2, 4, 6, 10],
+                    [0, 2, 4, 7, 10], [0, 2, 4, 8, 10], [0, 2, 5, 7, 10], [0, 2, 5, 8, 10],
+                    [0, 2, 6, 8, 10], [0, 3, 5, 7, 10], [0, 3, 5, 8, 10], [0, 3, 6, 8, 10],
+                    [0, 4, 6, 8, 10], [0, 2, 4, 6, 8, 10], [1], [1, 3], [1, 4], [1, 5], [1, 3, 5],
+                    [1, 6], [1, 3, 6], [1, 4, 6], [1, 7], [1, 3, 7], [1, 4, 7], [1, 5, 7],
+                    [1, 3, 5, 7], [1, 8], [1, 3, 8], [1, 4, 8], [1, 5, 8], [1, 6, 8], [1, 3, 5, 8],
+                    [1, 3, 6, 8], [1, 4, 6, 8], [1, 9], [1, 3, 9], [1, 4, 9], [1, 5, 9], [1, 6, 9],
+                    [1, 7, 9], [1, 3, 5, 9], [1, 3, 6, 9], [1, 3, 7, 9], [1, 4, 6, 9],
+                    [1, 4, 7, 9], [1, 5, 7, 9], [1, 3, 5, 7, 9], [1, 10], [1, 3, 10], [1, 4, 10],
+                    [1, 5, 10], [1, 6, 10], [1, 7, 10], [1, 8, 10], [1, 3, 5, 10], [1, 3, 6, 10],
+                    [1, 3, 7, 10], [1, 3, 8, 10], [1, 4, 6, 10], [1, 4, 7, 10], [1, 4, 8, 10],
+                    [1, 5, 7, 10], [1, 5, 8, 10], [1, 6, 8, 10], [1, 3, 5, 7, 10],
+                    [1, 3, 5, 8, 10], [1, 3, 6, 8, 10], [1, 4, 6, 8, 10], [1, 11], [1, 3, 11],
+                    [1, 4, 11], [1, 5, 11], [1, 6, 11], [1, 7, 11], [1, 8, 11], [1, 9, 11],
+                    [1, 3, 5, 11], [1, 3, 6, 11], [1, 3, 7, 11], [1, 3, 8, 11], [1, 3, 9, 11],
+                    [1, 4, 6, 11], [1, 4, 7, 11], [1, 4, 8, 11], [1, 4, 9, 11], [1, 5, 7, 11],
+                    [1, 5, 8, 11], [1, 5, 9, 11], [1, 6, 8, 11], [1, 6, 9, 11], [1, 7, 9, 11],
+                    [1, 3, 5, 7, 11], [1, 3, 5, 8, 11], [1, 3, 5, 9, 11], [1, 3, 6, 8, 11],
+                    [1, 3, 6, 9, 11], [1, 3, 7, 9, 11], [1, 4, 6, 8, 11], [1, 4, 6, 9, 11],
+                    [1, 4, 7, 9, 11], [1, 5, 7, 9, 11], [1, 3, 5, 7, 9, 11], [2], [2, 4], [2, 5],
+                    [2, 6], [2, 4, 6], [2, 7], [2, 4, 7], [2, 5, 7], [2, 8], [2, 4, 8], [2, 5, 8],
+                    [2, 6, 8], [2, 4, 6, 8], [2, 9], [2, 4, 9], [2, 5, 9], [2, 6, 9], [2, 7, 9],
+                    [2, 4, 6, 9], [2, 4, 7, 9], [2, 5, 7, 9], [2, 10], [2, 4, 10], [2, 5, 10],
+                    [2, 6, 10], [2, 7, 10], [2, 8, 10], [2, 4, 6, 10], [2, 4, 7, 10],
+                    [2, 4, 8, 10], [2, 5, 7, 10], [2, 5, 8, 10], [2, 6, 8, 10], [2, 4, 6, 8, 10],
+                    [2, 11], [2, 4, 11], [2, 5, 11], [2, 6, 11], [2, 7, 11], [2, 8, 11],
+                    [2, 9, 11], [2, 4, 6, 11], [2, 4, 7, 11], [2, 4, 8, 11], [2, 4, 9, 11],
+                    [2, 5, 7, 11], [2, 5, 8, 11], [2, 5, 9, 11], [2, 6, 8, 11], [2, 6, 9, 11],
+                    [2, 7, 9, 11], [2, 4, 6, 8, 11], [2, 4, 6, 9, 11], [2, 4, 7, 9, 11],
+                    [2, 5, 7, 9, 11], [3], [3, 5], [3, 6], [3, 7], [3, 5, 7], [3, 8], [3, 5, 8],
+                    [3, 6, 8], [3, 9], [3, 5, 9], [3, 6, 9], [3, 7, 9], [3, 5, 7, 9], [3, 10],
+                    [3, 5, 10], [3, 6, 10], [3, 7, 10], [3, 8, 10], [3, 5, 7, 10], [3, 5, 8, 10],
+                    [3, 6, 8, 10], [3, 11], [3, 5, 11], [3, 6, 11], [3, 7, 11], [3, 8, 11],
+                    [3, 9, 11], [3, 5, 7, 11], [3, 5, 8, 11], [3, 5, 9, 11], [3, 6, 8, 11],
+                    [3, 6, 9, 11], [3, 7, 9, 11], [3, 5, 7, 9, 11], [4], [4, 6], [4, 7], [4, 8],
+                    [4, 6, 8], [4, 9], [4, 6, 9], [4, 7, 9], [4, 10], [4, 6, 10], [4, 7, 10],
+                    [4, 8, 10], [4, 6, 8, 10], [4, 11], [4, 6, 11], [4, 7, 11], [4, 8, 11],
+                    [4, 9, 11], [4, 6, 8, 11], [4, 6, 9, 11], [4, 7, 9, 11], [5], [5, 7], [5, 8],
+                    [5, 9], [5, 7, 9], [5, 10], [5, 7, 10], [5, 8, 10], [5, 11], [5, 7, 11],
+                    [5, 8, 11], [5, 9, 11], [5, 7, 9, 11], [6], [6, 8], [6, 9], [6, 10],
+                    [6, 8, 10], [6, 11], [6, 8, 11], [6, 9, 11], [7], [7, 9], [7, 10], [7, 11],
+                    [7, 9, 11], [8], [8, 10], [8, 11], [9], [9, 11], [10], [11]]
+
+###################################################################################
+
+MIDI_Instruments_Families = {
+                            0: 'Piano Family',
+                            1: 'Chromatic Percussion Family',
+                            2: 'Organ Family',
+                            3: 'Guitar Family',
+                            4: 'Bass Family',
+                            5: 'Strings Family',
+                            6: 'Ensemble Family',
+                            7: 'Brass Family',
+                            8: 'Reed Family',
+                            9: 'Pipe Family',
+                            10: 'Synth Lead Family',
+                            11: 'Synth Pad Family',
+                            12: 'Synth Effects Family',
+                            13: 'Ethnic Family',
+                            14: 'Percussive Family',
+                            15: 'Sound Effects Family',
+                            16: 'Drums Family',
+                            -1: 'Unknown Family',
+                            }
+
+###################################################################################
+
+def patch_to_instrument_family(MIDI_patch, drums_patch=128):
+
+  if 0 <= MIDI_patch < 128:
+    return MIDI_patch // 8, MIDI_Instruments_Families[MIDI_patch // 8]
+
+  elif MIDI_patch == drums_patch:
+    return MIDI_patch // 8, MIDI_Instruments_Families[16]
+
+  else:
+    return -1, MIDI_Instruments_Families[-1]
+
+###################################################################################
+
+def patch_list_from_enhanced_score_notes(enhanced_score_notes, 
+                                         default_patch=0, 
+                                         drums_patch=9,
+                                         verbose=False
+                                         ):
+
+  patches = [-1] * 16
+
+  for idx, e in enumerate(enhanced_score_notes):
+    if e[3] != 9:
+        if patches[e[3]] == -1:
+            patches[e[3]] = e[6]
+        else:
+            if patches[e[3]] != e[6]:
+              if e[6] in patches:
+                e[3] = patches.index(e[6])
+              else:
+                if -1 in patches:
+                    patches[patches.index(-1)] = e[6]
+                else:
+                  patches[-1] = e[6]
+
+                  if verbose:
+                    print('=' * 70)
+                    print('WARNING! Composition has more than 15 patches!')
+                    print('Conflict note number:', idx)
+                    print('Conflict channel number:', e[3])
+                    print('Conflict patch number:', e[6])
+
+  patches = [p if p != -1 else default_patch for p in patches]
+
+  patches[9] = drums_patch
+
+  if verbose:
+    print('=' * 70)
+    print('Composition patches')
+    print('=' * 70)
+    for c, p in enumerate(patches):
+      print('Cha', str(c).zfill(2), '---', str(p).zfill(3), Number2patch[p])
+    print('=' * 70)
+
+  return patches
+
+###################################################################################
+
+def patch_enhanced_score_notes(enhanced_score_notes, 
+                                default_patch=0, 
+                                drums_patch=9,
+                                verbose=False
+                                ):
+  
+    #===========================================================================    
+  
+    enhanced_score_notes_with_patch_changes = []
+
+    patches = [-1] * 16
+
+    overflow_idx = -1
+
+    for idx, e in enumerate(enhanced_score_notes):
+      if e[3] != 9:
+          if patches[e[3]] == -1:
+              patches[e[3]] = e[6]
+          else:
+              if patches[e[3]] != e[6]:
+                if e[6] in patches:
+                  e[3] = patches.index(e[6])
+                else:
+                  if -1 in patches:
+                      patches[patches.index(-1)] = e[6]
+                  else:
+                      overflow_idx = idx
+                      break
+
+      enhanced_score_notes_with_patch_changes.append(e)
+
+    #===========================================================================
+
+    overflow_patches = []
+
+    if overflow_idx != -1:
+      for idx, e in enumerate(enhanced_score_notes[overflow_idx:]):
+        if e[3] != 9:
+          if e[6] not in patches:
+            if e[6] not in overflow_patches:
+              overflow_patches.append(e[6])
+              enhanced_score_notes_with_patch_changes.append(['patch_change', e[1], e[3], e[6]])
+          else:
+            e[3] = patches.index(e[6])
+
+        enhanced_score_notes_with_patch_changes.append(e)
+
+    #===========================================================================
+
+    patches = [p if p != -1 else default_patch for p in patches]
+
+    patches[9] = drums_patch
+
+    #===========================================================================
+
+    if verbose:
+      print('=' * 70)
+      print('Composition patches')
+      print('=' * 70)
+      for c, p in enumerate(patches):
+        print('Cha', str(c).zfill(2), '---', str(p).zfill(3), Number2patch[p])
+      print('=' * 70)
+
+      if overflow_patches:
+        print('Extra composition patches')
+        print('=' * 70)
+        for c, p in enumerate(overflow_patches):
+          print(str(p).zfill(3), Number2patch[p])
+        print('=' * 70)
+
+    return enhanced_score_notes_with_patch_changes, patches, overflow_patches
+
+###################################################################################
+
+def create_enhanced_monophonic_melody(monophonic_melody):
+
+    enhanced_monophonic_melody = []
+
+    for i, note in enumerate(monophonic_melody[:-1]):
+
+      enhanced_monophonic_melody.append(note)
+
+      if note[1]+note[2] < monophonic_melody[i+1][1]:
+        
+        delta_time = monophonic_melody[i+1][1] - (note[1]+note[2])
+        enhanced_monophonic_melody.append(['silence', note[1]+note[2], delta_time, note[3], 0, 0, note[6]])
+        
+    enhanced_monophonic_melody.append(monophonic_melody[-1])
+
+    return enhanced_monophonic_melody
+
+###################################################################################
+
+def frame_monophonic_melody(monophonic_melody, min_frame_time_threshold=10):
+
+    mzip = list(zip(monophonic_melody[:-1], monophonic_melody[1:]))
+
+    times_counts = Counter([(b[1]-a[1]) for a, b in mzip]).most_common()
+
+    mc_time = next((item for item, count in times_counts if item >= min_frame_time_threshold), min_frame_time_threshold)
+
+    times = [(b[1]-a[1]) // mc_time for a, b in mzip] + [monophonic_melody[-1][2] // mc_time]
+
+    framed_melody = []
+
+    for i, note in enumerate(monophonic_melody):
+      
+      stime = note[1]
+      count = times[i]
+      
+      if count != 0:
+        for j in range(count):
+
+          new_note = copy.deepcopy(note)
+          new_note[1] = stime + (j * mc_time)
+          new_note[2] = mc_time
+          framed_melody.append(new_note)
+      
+      else:
+        framed_melody.append(note)
+
+    return [framed_melody, mc_time]
+
+###################################################################################
+
+def delta_score_notes(score_notes, 
+                      timings_clip_value=255, 
+                      even_timings=False,
+                      compress_timings=False
+                      ):
+
+  delta_score = []
+
+  pe = score_notes[0]
+
+  for n in score_notes:
+
+    note = copy.deepcopy(n)
+
+    time =  n[1] - pe[1]
+    dur = n[2]
+
+    if even_timings:
+      if time != 0 and time % 2 != 0:
+        time += 1
+      if dur % 2 != 0:
+        dur += 1
+
+    time = max(0, min(timings_clip_value, time))
+    dur = max(0, min(timings_clip_value, dur))
+
+    if compress_timings:
+      time /= 2
+      dur /= 2
+
+    note[1] = int(time)
+    note[2] = int(dur)
+
+    delta_score.append(note)
+
+    pe = n
+
+  return delta_score
 
 ###################################################################################
 
